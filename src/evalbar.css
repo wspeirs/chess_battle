@@ -31,10 +31,27 @@
 
 .eval-bar-label.label-top {
   top: 2px;
-  color: #888;
+  color: #eee;
 }
 
 .eval-bar-label.label-bottom {
   bottom: 2px;
   color: #333;
+}
+
+/* Flipped orientation: Black at bottom, White at top */
+.eval-bar.flipped {
+  background: #f0f0f0;
+}
+
+.eval-bar.flipped .eval-bar-fill {
+  background: #2b2b2b;
+}
+
+.eval-bar.flipped .eval-bar-label.label-top {
+  color: #333;
+}
+
+.eval-bar.flipped .eval-bar-label.label-bottom {
+  color: #eee;
 }

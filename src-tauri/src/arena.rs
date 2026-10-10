@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,9 +17,17 @@ use crate::evaluator::Evaluator;
 use crate::game::{Game, GameEnd};
 use crate::presets::{detect as detect_preset, list_presets as get_presets, Preset};
 
-// --- Payload types per plan ---
+pub trait ArenaEmitter: Send + Sync + 'static {
+    fn emit_event(&self, event: &str, payload: serde_json::Value);
+}
 
-#[derive(Clone, Debug, Serialize)]
+impl ArenaEmitter for AppHandle {
+    fn emit_event(&self, event: &str, payload: serde_json::Value) {
+        let _ = self.emit(event, payload);
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PositionPayload {
     pub ply: u32,
     pub fen: String,
@@ -29,7 +37,7 @@ pub struct PositionPayload {
     pub check: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PvLinePayload {
     pub multipv: u32,
     pub score: Option<Score>,
@@ -39,7 +47,7 @@ pub struct PvLinePayload {
     pub first_move: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EngineInfoPayload {
     pub side: String,
     pub name: String,
@@ -53,13 +61,13 @@ pub struct EngineInfoPayload {
     pub lines: Vec<PvLinePayload>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GameOverPayload {
     pub result: String,
     pub reason: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EngineErrorPayload {
     pub side: String,
     pub message: String,
@@ -189,8 +197,10 @@ pub enum DriverCmd {
         limit: Limit,
         search_id: u64,
     },
-    Stop,
-    SetMultiPv(u32),
+    StopAndSetMultiPv {
+        multipv: Option<u32>,
+        search_id: u64,
+    },
     Shutdown,
 }
 
@@ -205,6 +215,10 @@ pub enum DriverEvent {
         side: Color,
         search_id: u64,
         mv: Option<shakmaty::uci::UciMove>,
+    },
+    Stopped {
+        side: Color,
+        search_id: u64,
     },
     Exited {
         side: Color,
@@ -246,13 +260,38 @@ impl EngineDriver {
                                     break;
                                 }
                             }
-                            Some(DriverCmd::Stop) => {
+                            Some(DriverCmd::StopAndSetMultiPv { multipv, search_id }) => {
                                 if is_searching {
                                     let _ = engine.stop().await;
+                                    // Drain until BestMove or Exited
+                                    while let Some(ev) = engine.events_mut().recv().await {
+                                        match ev {
+                                            EngineEvent::BestMove(mv) => {
+                                                if multipv.is_none() {
+                                                    let _ = event_tx.send(DriverEvent::BestMove {
+                                                        side,
+                                                        search_id: current_search_id,
+                                                        mv,
+                                                    }).await;
+                                                }
+                                                break;
+                                            }
+                                            EngineEvent::Exited => {
+                                                let _ = event_tx.send(DriverEvent::Exited {
+                                                    side,
+                                                    search_id: current_search_id,
+                                                }).await;
+                                                break;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    is_searching = false;
                                 }
-                            }
-                            Some(DriverCmd::SetMultiPv(n)) => {
-                                let _ = engine.set_multipv(n).await;
+                                if let Some(n) = multipv {
+                                    let _ = engine.set_multipv(n).await;
+                                    let _ = event_tx.send(DriverEvent::Stopped { side, search_id }).await;
+                                }
                             }
                             Some(DriverCmd::Shutdown) | None => {
                                 engine.shutdown().await;
@@ -305,12 +344,16 @@ impl EngineDriver {
         let _ = self.cmd_tx.send(DriverCmd::Go { fen, moves, limit, search_id }).await;
     }
 
-    pub async fn stop(&self) {
-        let _ = self.cmd_tx.send(DriverCmd::Stop).await;
+    pub async fn stop_and_set_multipv(&self, multipv: Option<u32>, search_id: u64) {
+        let _ = self.cmd_tx.send(DriverCmd::StopAndSetMultiPv { multipv, search_id }).await;
+    }
+
+    pub async fn stop(&self, search_id: u64) {
+        let _ = self.cmd_tx.send(DriverCmd::StopAndSetMultiPv { multipv: None, search_id }).await;
     }
 
     pub async fn set_multipv(&self, n: u32) {
-        let _ = self.cmd_tx.send(DriverCmd::SetMultiPv(n)).await;
+        let _ = self.cmd_tx.send(DriverCmd::StopAndSetMultiPv { multipv: Some(n), search_id: 0 }).await;
     }
 
     pub async fn shutdown(&self) {
@@ -356,6 +399,7 @@ pub struct ArenaCore {
     pub state: ArenaState,
     pub mode: PlayMode,
     pub config: Config,
+    pub config_dir: PathBuf,
     pub game: Game,
     pub white_driver: Option<EngineDriver>,
     pub black_driver: Option<EngineDriver>,
@@ -365,7 +409,7 @@ pub struct ArenaCore {
     pub search_counter: Arc<AtomicU64>,
     pub white_throttle: ThrottleTracker,
     pub black_throttle: ThrottleTracker,
-    pub app: AppHandle,
+    pub app: Arc<dyn ArenaEmitter>,
     pub driver_event_tx: mpsc::Sender<DriverEvent>,
 }
 
@@ -394,7 +438,7 @@ impl ArenaCore {
             check,
         };
 
-        let _ = self.app.emit("position", payload);
+        self.app.emit_event("position", serde_json::to_value(&payload).unwrap_or_default());
 
         if let Some(eval) = &self.evaluator {
             eval.set_position(ply, &fen);
@@ -417,22 +461,24 @@ impl ArenaCore {
             eval.finish(white_pct);
         }
 
-        let _ = self.app.emit(
+        self.app.emit_event(
             "game-over",
-            GameOverPayload {
+            serde_json::to_value(&GameOverPayload {
                 result: end.result.to_string(),
                 reason: end.reason,
-            },
+            })
+            .unwrap_or_default(),
         );
     }
 
     pub fn emit_engine_error(&self, side: &str, message: &str) {
-        let _ = self.app.emit(
+        self.app.emit_event(
             "engine-error",
-            EngineErrorPayload {
+            serde_json::to_value(&EngineErrorPayload {
                 side: side.to_string(),
                 message: message.to_string(),
-            },
+            })
+            .unwrap_or_default(),
         );
     }
 
@@ -460,14 +506,14 @@ impl ArenaCore {
         }
     }
 
-    pub async fn start_search_for_current_turn(&mut self) {
+    pub async fn start_search_for_current_turn(&mut self, existing_search_id: Option<u64>) {
         if let Some(end) = self.game.status() {
             self.emit_game_over(end);
             return;
         }
 
         let turn = self.game.side_to_move();
-        let search_id = self.start_search_id();
+        let search_id = existing_search_id.unwrap_or_else(|| self.start_search_id());
 
         let driver = match turn {
             Color::White => self.white_driver.as_ref(),
@@ -514,16 +560,30 @@ impl ArenaCore {
                 ArenaState::AwaitingNext { side: turn, search_id },
             ),
         };
+        let start_fen = self.game.start_fen();
+        let fen_arg = if self.game.is_custom_fen() {
+            Some(start_fen)
+        } else {
+            None
+        };
 
         self.state = new_state;
-        driver.go(None, played_ucis, limit, search_id).await;
+        driver.go(fen_arg, played_ucis, limit, search_id).await;
     }
 
     pub async fn restart_current_search(&mut self) {
-        let (side, _search_id) = match self.state {
-            ArenaState::Thinking { side, search_id } => (side, search_id),
-            ArenaState::AwaitingNext { side, search_id } => (side, search_id),
+        let side = match self.state {
+            ArenaState::Thinking { side, .. } => side,
+            ArenaState::AwaitingNext { side, .. } => side,
             _ => return,
+        };
+
+        let mpv = if self.config.side_boards { 3 } else { 1 };
+        let new_search_id = self.start_search_id();
+
+        self.state = match self.mode {
+            PlayMode::PlayToEnd => ArenaState::Thinking { side, search_id: new_search_id },
+            PlayMode::TurnByTurn => ArenaState::AwaitingNext { side, search_id: new_search_id },
         };
 
         let driver = match side {
@@ -532,22 +592,8 @@ impl ArenaCore {
         };
 
         if let Some(d) = driver {
-            d.stop().await;
+            d.stop_and_set_multipv(Some(mpv), new_search_id).await;
         }
-
-        // Advance search counter to invalidate in-flight events
-        self.search_counter.fetch_add(1, Ordering::SeqCst);
-
-        // Update MultiPV if side_boards changed
-        let mpv = if self.config.side_boards { 3 } else { 1 };
-        if let Some(d) = match side {
-            Color::White => self.white_driver.as_ref(),
-            Color::Black => self.black_driver.as_ref(),
-        } {
-            d.set_multipv(mpv).await;
-        }
-
-        self.start_search_for_current_turn().await;
     }
 
     pub async fn handle_driver_event(&mut self, event: DriverEvent) {
@@ -577,7 +623,7 @@ impl ArenaCore {
 
                 if throttle.should_emit(now, interval) {
                     let payload = throttle.build_payload(side, &name, now);
-                    let _ = self.app.emit("engine-info", payload);
+                    self.app.emit_event("engine-info", serde_json::to_value(&payload).unwrap_or_default());
                 }
             }
             DriverEvent::BestMove {
@@ -602,7 +648,7 @@ impl ArenaCore {
                     Color::Black => (&mut self.black_throttle, self.black_name.clone()),
                 };
                 let payload = throttle.build_payload(side, &name, now);
-                let _ = self.app.emit("engine-info", payload);
+                self.app.emit_event("engine-info", serde_json::to_value(&payload).unwrap_or_default());
 
                 match decide_forfeit_or_legal_move(&mut self.game, side, mv) {
                     Ok(_played_mv) => {
@@ -610,13 +656,23 @@ impl ArenaCore {
                         if let Some(end) = self.game.status() {
                             self.emit_game_over(end);
                         } else {
-                            self.start_search_for_current_turn().await;
+                            self.start_search_for_current_turn(None).await;
                         }
                     }
                     Err(end) => {
                         self.emit_game_over(end);
                     }
                 }
+            }
+            DriverEvent::Stopped { side: _, search_id } => {
+                if let Some(curr_id) = self.current_search_id() {
+                    if is_search_id_stale(search_id, curr_id) {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+                self.start_search_for_current_turn(Some(search_id)).await;
             }
             DriverEvent::Exited { side, search_id } => {
                 let current_id = match self.state {
@@ -651,7 +707,16 @@ impl Arena {
             .path()
             .app_config_dir()
             .unwrap_or_else(|_| PathBuf::from("."));
+        Self::with_emitter_and_config_dir(Arc::new(app), config_dir)
+    }
+
+    pub fn with_emitter(emitter: Arc<dyn ArenaEmitter>) -> Self {
+        Self::with_emitter_and_config_dir(emitter, PathBuf::from("."))
+    }
+
+    pub fn with_emitter_and_config_dir(emitter: Arc<dyn ArenaEmitter>, config_dir: PathBuf) -> Self {
         let config = Config::load(&config_dir);
+
         let game = Game::new(None).expect("default game");
 
         let (driver_event_tx, mut driver_event_rx) = mpsc::channel::<DriverEvent>(128);
@@ -662,6 +727,7 @@ impl Arena {
             state: ArenaState::Idle,
             mode: PlayMode::PlayToEnd,
             config,
+            config_dir,
             game,
             white_driver: None,
             black_driver: None,
@@ -671,7 +737,7 @@ impl Arena {
             search_counter,
             white_throttle: ThrottleTracker::default(),
             black_throttle: ThrottleTracker::default(),
-            app,
+            app: emitter,
             driver_event_tx,
         }));
 
@@ -683,8 +749,43 @@ impl Arena {
                 guard.handle_driver_event(ev).await;
             }
         });
-
         Self { core }
+    }
+
+    pub async fn next(&self) -> Result<(), String> {
+        let guard = self.core.lock().await;
+        match guard.state {
+            ArenaState::AwaitingNext { side, .. } => {
+                let driver = match side {
+                    Color::White => guard.white_driver.as_ref(),
+                    Color::Black => guard.black_driver.as_ref(),
+                };
+                let search_id = guard.current_search_id().unwrap_or(0);
+                if let Some(d) = driver {
+                    d.stop(search_id).await;
+                }
+                Ok(())
+            }
+            _ => Err("next is only allowed in AwaitingNext state".to_string()),
+        }
+    }
+
+    pub async fn move_now(&self) -> Result<(), String> {
+        let guard = self.core.lock().await;
+        match guard.state {
+            ArenaState::Thinking { side, .. } => {
+                let driver = match side {
+                    Color::White => guard.white_driver.as_ref(),
+                    Color::Black => guard.black_driver.as_ref(),
+                };
+                let search_id = guard.current_search_id().unwrap_or(0);
+                if let Some(d) = driver {
+                    d.stop(search_id).await;
+                }
+                Ok(())
+            }
+            _ => Err("move_now is only allowed in Thinking state".to_string()),
+        }
     }
 }
 
@@ -765,11 +866,7 @@ pub async fn get_config(arena: State<'_, Arena>) -> Result<Config, String> {
 pub async fn set_config(config: Config, arena: State<'_, Arena>) -> Result<(), String> {
     let mut guard = arena.core.lock().await;
     guard.config = config;
-    let config_dir = guard
-        .app
-        .path()
-        .app_config_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
+    let config_dir = guard.config_dir.clone();
     guard.config.save(&config_dir)?;
     Ok(())
 }
@@ -782,13 +879,8 @@ pub async fn set_side_boards(side_boards: bool, arena: State<'_, Arena>) -> Resu
     }
     guard.config.side_boards = side_boards;
 
-    let config_dir = guard
-        .app
-        .path()
-        .app_config_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
+    let config_dir = guard.config_dir.clone();
     let _ = guard.config.save(&config_dir);
-
     // If searching, restart current search to toggle MultiPV 3 <-> 1
     guard.restart_current_search().await;
 
@@ -904,7 +996,7 @@ pub async fn new_game(start_fen: Option<String>, arena: State<'_, Arena>) -> Res
     guard.emit_position();
 
     // Start thinking for side to move
-    guard.start_search_for_current_turn().await;
+    guard.start_search_for_current_turn(None).await;
 
     Ok(())
 }
@@ -931,38 +1023,12 @@ pub async fn set_mode(mode: String, arena: State<'_, Arena>) -> Result<(), Strin
 
 #[tauri::command]
 pub async fn next(arena: State<'_, Arena>) -> Result<(), String> {
-    let guard = arena.core.lock().await;
-    match guard.state {
-        ArenaState::AwaitingNext { side, .. } => {
-            let driver = match side {
-                Color::White => guard.white_driver.as_ref(),
-                Color::Black => guard.black_driver.as_ref(),
-            };
-            if let Some(d) = driver {
-                d.stop().await;
-            }
-            Ok(())
-        }
-        _ => Err("next is only allowed in AwaitingNext state".to_string()),
-    }
+    arena.next().await
 }
 
 #[tauri::command]
 pub async fn move_now(arena: State<'_, Arena>) -> Result<(), String> {
-    let guard = arena.core.lock().await;
-    match guard.state {
-        ArenaState::Thinking { side, .. } => {
-            let driver = match side {
-                Color::White => guard.white_driver.as_ref(),
-                Color::Black => guard.black_driver.as_ref(),
-            };
-            if let Some(d) = driver {
-                d.stop().await;
-            }
-            Ok(())
-        }
-        _ => Err("move_now is only allowed in Thinking state".to_string()),
-    }
+    arena.move_now().await
 }
 
 #[tauri::command]

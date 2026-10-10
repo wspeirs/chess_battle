@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
+use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use shakmaty::Color;
 use tauri::Emitter;
 use tokio::sync::mpsc;
@@ -9,14 +10,14 @@ use tokio::sync::mpsc;
 use crate::config::{EngineConfig, LimitCfg};
 use crate::engine::{Engine, EngineEvent, Limit, Score};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalScorePayload {
     #[serde(rename = "type")]
-    pub score_type: &'static str,
+    pub score_type: String,
     pub value: i32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalPayload {
     pub ply: u32,
     pub depth: u32,
@@ -25,9 +26,9 @@ pub struct EvalPayload {
     pub white_pct: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineErrorPayload {
-    pub side: &'static str,
+    pub side: String,
     pub message: String,
 }
 
@@ -86,14 +87,14 @@ pub fn normalize_score(score: &Score, white_to_move: bool) -> EvalScorePayload {
         Score::Cp(cp) => {
             let val = if white_to_move { *cp } else { -*cp };
             EvalScorePayload {
-                score_type: "cp",
+                score_type: "cp".to_string(),
                 value: val,
             }
         }
         Score::Mate(m) => {
             let val = if white_to_move { *m } else { -*m };
             EvalScorePayload {
-                score_type: "mate",
+                score_type: "mate".to_string(),
                 value: val,
             }
         }
@@ -101,7 +102,7 @@ pub fn normalize_score(score: &Score, white_to_move: bool) -> EvalScorePayload {
 }
 
 impl Evaluator {
-    pub async fn start(cfg: &EngineConfig, app: tauri::AppHandle) -> Result<Evaluator, String> {
+    pub async fn start(cfg: &EngineConfig, app: Arc<dyn crate::arena::ArenaEmitter>) -> Result<Evaluator, String> {
         let mut engine = Engine::spawn(&cfg.path, &cfg.args).map_err(|e| e.to_string())?;
 
         engine
@@ -147,12 +148,11 @@ impl Evaluator {
         }
     }
 }
-
 async fn run_evaluator_loop(
     mut engine: Engine,
     limit: Limit,
     cmd_rx: std_mpsc::Receiver<Command>,
-    app: tauri::AppHandle,
+    app: Arc<dyn crate::arena::ArenaEmitter>,
 ) {
     let (async_tx, mut async_rx) = mpsc::channel::<Command>(32);
 
@@ -173,6 +173,7 @@ async fn run_evaluator_loop(
     let mut white_to_move: bool = true;
     let mut last_depth: u32 = 0;
     let mut searching = false;
+    let mut finished = false;
 
     loop {
         tokio::select! {
@@ -183,6 +184,7 @@ async fn run_evaluator_loop(
                 };
                 match cmd {
                     Command::SetPosition { ply, fen } => {
+                        finished = false;
                         if searching {
                             let _ = engine.stop().await;
                             // Drain remaining events until BestMove or timeout
@@ -202,18 +204,18 @@ async fn run_evaluator_loop(
                         };
 
                         if let Err(e) = engine.position(Some(&fen), &[]).await {
-                            let _ = app.emit("engine-error", EngineErrorPayload {
-                                side: "evaluator",
+                            let _ = app.emit_event("engine-error", serde_json::to_value(&EngineErrorPayload {
+                                side: "evaluator".to_string(),
                                 message: e.to_string(),
-                            });
+                            }).unwrap_or_default());
                             break;
                         }
 
                         if let Err(e) = engine.go(limit).await {
-                            let _ = app.emit("engine-error", EngineErrorPayload {
-                                side: "evaluator",
+                            let _ = app.emit_event("engine-error", serde_json::to_value(&EngineErrorPayload {
+                                side: "evaluator".to_string(),
                                 message: e.to_string(),
-                            });
+                            }).unwrap_or_default());
                             break;
                         }
                         searching = true;
@@ -224,17 +226,18 @@ async fn run_evaluator_loop(
                             drain_bestmove(engine.events_mut()).await;
                             searching = false;
                         }
+                        finished = true;
                         let payload = EvalPayload {
                             ply: 0,
                             depth: 0,
                             score: EvalScorePayload {
-                                score_type: "cp",
+                                score_type: "cp".to_string(),
                                 value: 0,
                             },
                             wdl: None,
                             white_pct,
                         };
-                        let _ = app.emit("eval", payload);
+                        let _ = app.emit_event("eval", serde_json::to_value(&payload).unwrap_or_default());
                     }
                     Command::Shutdown => {
                         break;
@@ -244,26 +247,28 @@ async fn run_evaluator_loop(
             event_opt = engine.events_mut().recv() => {
                 match event_opt {
                     Some(EngineEvent::Info(info)) => {
-                        if let (Some(depth), Some(score)) = (info.depth, &info.score) {
-                            if depth > last_depth {
-                                last_depth = depth;
-                                let pct = win_pct(score, info.wdl, white_to_move);
-                                let norm_score = normalize_score(score, white_to_move);
-                                let wdl_vec = info.wdl.map(|(w, d, l)| {
-                                    if white_to_move {
-                                        vec![w, d, l]
-                                    } else {
-                                        vec![l, d, w]
-                                    }
-                                });
-                                let payload = EvalPayload {
-                                    ply: current_ply,
-                                    depth,
-                                    score: norm_score,
-                                    wdl: wdl_vec,
-                                    white_pct: pct,
-                                };
-                                let _ = app.emit("eval", payload);
+                        if !finished {
+                            if let (Some(depth), Some(score)) = (info.depth, &info.score) {
+                                if depth > last_depth {
+                                    last_depth = depth;
+                                    let pct = win_pct(score, info.wdl, white_to_move);
+                                    let norm_score = normalize_score(score, white_to_move);
+                                    let wdl_vec = info.wdl.map(|(w, d, l)| {
+                                        if white_to_move {
+                                            vec![w, d, l]
+                                        } else {
+                                            vec![l, d, w]
+                                        }
+                                    });
+                                    let payload = EvalPayload {
+                                        ply: current_ply,
+                                        depth,
+                                        score: norm_score,
+                                        wdl: wdl_vec,
+                                        white_pct: pct,
+                                    };
+                                    let _ = app.emit_event("eval", serde_json::to_value(&payload).unwrap_or_default());
+                                }
                             }
                         }
                     }
@@ -271,10 +276,10 @@ async fn run_evaluator_loop(
                         searching = false;
                     }
                     Some(EngineEvent::Exited) => {
-                        let _ = app.emit("engine-error", EngineErrorPayload {
-                            side: "evaluator",
+                        let _ = app.emit_event("engine-error", serde_json::to_value(&EngineErrorPayload {
+                            side: "evaluator".to_string(),
                             message: "evaluator engine process exited unexpectedly".to_string(),
-                        });
+                        }).unwrap_or_default());
                         break;
                     }
                     None => {

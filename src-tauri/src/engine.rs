@@ -13,13 +13,13 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use vampirc_uci::{parse_one, UciInfoAttribute, UciMessage, UciOptionConfig};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub enum Score {
     Cp(i32),
     Mate(i32),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, serde::Deserialize)]
 pub struct InfoUpdate {
     pub depth: Option<u32>,
     pub seldepth: Option<u32>,
@@ -33,8 +33,23 @@ pub struct InfoUpdate {
     pub hashfull: Option<u32>,
     pub tbhits: Option<u64>,
     pub time_ms: Option<u64>,
-    #[serde(serialize_with = "serialize_pv")]
+    #[serde(serialize_with = "serialize_pv", deserialize_with = "deserialize_pv")]
     pub pv: Vec<UciMove>,
+}
+
+fn deserialize_pv<'de, D>(deserializer: D) -> Result<Vec<UciMove>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let strings = Vec::<String>::deserialize(deserializer)?;
+    let mut moves = Vec::new();
+    for s in strings {
+        if let Ok(m) = UciMove::from_ascii(s.as_bytes()) {
+            moves.push(m);
+        }
+    }
+    Ok(moves)
 }
 
 fn serialize_pv<S>(pv: &[UciMove], serializer: S) -> Result<S::Ok, S::Error>

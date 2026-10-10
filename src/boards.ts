@@ -179,8 +179,8 @@ export function createBoards(elements: BoardElements): BoardManager {
 
     setSideBoards(enabled) {
       sideBoardsVisible = enabled;
-      elements.leftContainer.style.display = enabled ? "flex" : "none";
-      elements.rightContainer.style.display = enabled ? "flex" : "none";
+      elements.leftContainer.style.display = enabled ? "" : "none";
+      elements.rightContainer.style.display = enabled ? "" : "none";
       if (enabled) {
         renderAllSideBoards();
       }

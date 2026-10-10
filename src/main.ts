@@ -111,10 +111,11 @@ btnNewGame.addEventListener("click", async () => {
 
   try {
     await invoke("new_game", { startFen });
+    boards.reset(startFen || undefined);
     evalBar.reset();
     panels.reset();
+    syncEvalBarHeight();
   } catch (err: unknown) {
-    showError(`Failed to start game: ${String(err)}`);
   }
 });
 

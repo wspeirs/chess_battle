@@ -1,9 +1,9 @@
-mod arena;
-mod config;
-mod engine;
-mod evaluator;
-mod game;
-mod presets;
+pub mod arena;
+pub mod config;
+pub mod engine;
+pub mod evaluator;
+pub mod game;
+pub mod presets;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

@@ -197,7 +197,14 @@ impl Game {
     pub fn to_fen(&self) -> String {
         self.fen()
     }
+    pub fn start_fen(&self) -> String {
+        self.start_fen.clone()
+    }
 
+    pub fn is_custom_fen(&self) -> bool {
+        let default_fen = Fen::from_position(&Chess::default(), EnPassantMode::Legal).to_string();
+        self.start_fen != default_fen
+    }
     pub fn last_move_squares(&self) -> Option<(Square, Square)> {
         self.played_moves.last().map(|pm| (pm.mv.from().unwrap_or(Square::A1), pm.mv.to()))
     }

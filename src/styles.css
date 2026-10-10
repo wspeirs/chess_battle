@@ -133,7 +133,7 @@ html, body {
 /* Grid Layout */
 .arena-grid {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 24px minmax(360px, auto) minmax(180px, 1fr);
+  grid-template-columns: minmax(180px, 1fr) minmax(360px, auto) minmax(180px, 1fr);
   gap: 12px;
   padding: 10px 14px;
   flex: 1;
@@ -143,9 +143,12 @@ html, body {
 }
 
 .arena-grid.no-side-boards {
-  grid-template-columns: 24px minmax(360px, auto);
+  grid-template-columns: minmax(360px, auto);
 }
 
+.arena-grid.no-side-boards .side-column {
+  display: none;
+}
 /* Side columns */
 .side-column {
   display: flex;
@@ -193,10 +196,12 @@ html, body {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 100%;
-  min-height: 0;
+  height: min(var(--board-max-h), 80vw);
+  max-height: 100%;
+  width: 24px;
+  min-width: 24px;
+  flex-shrink: 0;
 }
-
 /* Center column */
 .center-column {
   display: flex;
@@ -269,13 +274,14 @@ html, body {
 /* Main board container */
 .main-board-container {
   display: flex;
+  flex-direction: row;
   justify-content: center;
   align-items: center;
+  gap: 8px;
   flex: 1;
   min-height: 0;
   width: 100%;
 }
-
 .main-board {
   height: min(var(--board-max-h), 80vw);
   width: min(var(--board-max-h), 80vw);

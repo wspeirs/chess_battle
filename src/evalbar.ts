@@ -58,6 +58,7 @@ export function createEvalBar(container: HTMLElement): EvalBar {
   let lastEvent: EvalEvent | null = null;
 
   function render() {
+    bar.classList.toggle("flipped", isFlipped);
     if (!lastEvent) {
       fill.style.height = "50%";
       labelBottom.textContent = "";
@@ -65,7 +66,6 @@ export function createEvalBar(container: HTMLElement): EvalBar {
       bar.title = "";
       return;
     }
-
     // white_pct is White's expected score (0..100)
     // If not flipped (White at bottom), fill height is white_pct%
     // If flipped (Black at bottom), fill height is (100 - white_pct)%
