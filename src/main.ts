@@ -6,6 +6,7 @@ import { createBoards } from "./boards";
 import { createPanels, type EngineInfo } from "./panels";
 import { createEvalBar, type EvalEvent } from "./evalbar";
 import { openEngineDialog } from "./engine-dialog";
+import { save } from "@tauri-apps/plugin-dialog";
 
 interface PositionEvent {
   ply: number;
@@ -101,6 +102,7 @@ btnNewGame.addEventListener("click", async () => {
   bannerResult.classList.add("hidden");
   bannerError.classList.add("hidden");
   isGameOver = false;
+  btnSavePgn.disabled = true;
   awaitingNext = false;
   currentPly = 0;
 
@@ -216,9 +218,24 @@ listen<GameOverEvent>("game-over", (event) => {
 
   bannerResult.textContent = `Game Over: ${go.result} — ${go.reason}`;
   bannerResult.classList.remove("hidden");
+  btnSavePgn.disabled = false;
 });
 
 listen<EngineErrorEvent>("engine-error", (event) => {
   const err = event.payload;
   showError(`Engine Error [${err.side}]: ${err.message}`);
 });
+
+const btnSavePgn = document.getElementById("btn-save-pgn") as HTMLButtonElement;
+const btnSaveFen = document.getElementById("btn-save-fen") as HTMLButtonElement;
+
+async function saveTo(cmd: "save_pgn" | "save_fen", name: string, ext: string) {
+  try {
+    const path = await save({ defaultPath: name, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
+    if (path) await invoke(cmd, { path });
+  } catch (err: unknown) {
+    showError(`Save error: ${String(err)}`);
+  }
+}
+btnSavePgn.addEventListener("click", () => saveTo("save_pgn", "game.pgn", "pgn"));
+btnSaveFen.addEventListener("click", () => saveTo("save_fen", "position.fen", "fen"));
