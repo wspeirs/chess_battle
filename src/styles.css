@@ -133,7 +133,7 @@ html, body {
 /* Grid Layout */
 .arena-grid {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(360px, auto) minmax(180px, 1fr);
+  grid-template-columns: minmax(180px, 1fr) calc(min(var(--board-max-h), 80vw) + 32px) minmax(180px, 1fr);
   gap: 12px;
   padding: 10px 14px;
   flex: 1;
@@ -143,7 +143,7 @@ html, body {
 }
 
 .arena-grid.no-side-boards {
-  grid-template-columns: minmax(360px, auto);
+  grid-template-columns: calc(min(var(--board-max-h), 80vw) + 32px);
 }
 
 .arena-grid.no-side-boards .side-column {
@@ -222,6 +222,8 @@ html, body {
   padding: 5px 8px;
   box-sizing: border-box;
   flex-shrink: 0;
+  height: 84px;
+  overflow: hidden;
 }
 
 .panel-header {
@@ -257,6 +259,7 @@ html, body {
   gap: 6px;
   font-family: monospace;
   font-size: 11px;
+  white-space: nowrap;
   line-height: 1.3;
 }
 
@@ -269,6 +272,10 @@ html, body {
 .panel-moves {
   color: #ccc;
   word-break: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 /* Main board container */
@@ -278,15 +285,13 @@ html, body {
   justify-content: center;
   align-items: center;
   gap: 8px;
-  flex: 1;
-  min-height: 0;
+  flex: none;
   width: 100%;
 }
 .main-board {
   height: min(var(--board-max-h), 80vw);
   width: min(var(--board-max-h), 80vw);
-  max-width: 100%;
-  max-height: 100%;
+  flex: none;
   aspect-ratio: 1 / 1;
 }
 

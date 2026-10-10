@@ -143,7 +143,9 @@ impl ThrottleTracker {
         }
 
         let multipv = info.multipv.unwrap_or(1);
-        let (san, end_fen) = game.pv_to_san(&info.pv);
+        let (san, _) = game.pv_to_san(&info.pv);
+        // Side boards show only the position after the first PV move.
+        let (_, end_fen) = game.pv_to_san(&info.pv[..info.pv.len().min(1)]);
         let first_move = info.pv.first().map(|m| m.to_string());
 
         let line = PvLinePayload {
@@ -186,6 +188,18 @@ impl ThrottleTracker {
             time_ms: self.latest_time_ms,
             lines,
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.last_emit = None;
+        self.latest_lines.clear();
+        self.latest_depth = None;
+        self.latest_seldepth = None;
+        self.latest_nodes = None;
+        self.latest_nps = None;
+        self.latest_hashfull = None;
+        self.latest_tbhits = None;
+        self.latest_time_ms = None;
     }
 }
 
@@ -238,7 +252,7 @@ impl EngineDriver {
     ) -> Self {
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<DriverCmd>(32);
 
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             let mut current_search_id: u64 = 0;
             let mut is_searching = false;
 
@@ -652,6 +666,12 @@ impl ArenaCore {
 
                 match decide_forfeit_or_legal_move(&mut self.game, side, mv) {
                     Ok(_played_mv) => {
+                        let (score_cp, mate) = match payload.lines.first().and_then(|l| l.score.as_ref()) {
+                            Some(Score::Cp(cp)) => (Some(*cp), None),
+                            Some(Score::Mate(m)) => (None, Some(*m)),
+                            None => (None, None),
+                        };
+                        self.game.set_last_move_eval(score_cp, mate, payload.depth);
                         self.emit_position();
                         if let Some(end) = self.game.status() {
                             self.emit_game_over(end);
@@ -743,7 +763,7 @@ impl Arena {
 
         // Event hub loop dispatching engine driver events to ArenaCore
         let core_clone = Arc::clone(&core);
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             while let Some(ev) = driver_event_rx.recv().await {
                 let mut guard = core_clone.lock().await;
                 guard.handle_driver_event(ev).await;
@@ -1086,6 +1106,24 @@ mod tests {
         assert!(!tracker.should_emit(now + Duration::from_millis(50), Duration::from_millis(100)));
         // After 100ms, should_emit is true
         assert!(tracker.should_emit(now + Duration::from_millis(101), Duration::from_millis(100)));
+    }
+
+    #[test]
+    fn test_throttle_tracker_clear() {
+        let mut tracker = ThrottleTracker::default();
+        let game = Game::new(None).unwrap();
+        let now = Instant::now();
+        let info = InfoUpdate {
+            depth: Some(10),
+            nodes: Some(500),
+            ..Default::default()
+        };
+        tracker.update(&info, &game);
+        tracker.clear();
+        let payload = tracker.build_payload(Color::White, "Stockfish", now);
+        assert!(payload.depth.is_none());
+        assert!(payload.nodes.is_none());
+        assert!(payload.lines.is_empty());
     }
 
     #[test]

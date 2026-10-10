@@ -77,6 +77,7 @@ impl Game {
             .to_move(&self.current_pos)
             .map_err(|_| IllegalMove(format!("move '{}' is illegal in current position", uci_str)))?;
 
+        let is_irreversible = self.current_pos.is_irreversible(m.clone());
         let mut next_pos = self.current_pos.clone();
         let san = shakmaty::san::SanPlus::from_move_and_play_unchecked(&mut next_pos, m.clone()).to_string();
 
@@ -91,7 +92,7 @@ impl Game {
         };
         self.played_moves.push(played.clone());
 
-        if self.current_pos.halfmoves() == 0 {
+        if is_irreversible {
             self.rep_history.clear();
         }
         let hash = self.current_pos.zobrist_hash::<Zobrist64>(EnPassantMode::Legal);

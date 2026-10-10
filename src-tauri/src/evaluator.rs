@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
 use serde::{Deserialize, Serialize};
 use shakmaty::Color;
-use tauri::Emitter;
 use tokio::sync::mpsc;
 
 use crate::config::{EngineConfig, LimitCfg};
@@ -228,7 +227,7 @@ async fn run_evaluator_loop(
                         }
                         finished = true;
                         let payload = EvalPayload {
-                            ply: 0,
+                            ply: current_ply,
                             depth: 0,
                             score: EvalScorePayload {
                                 score_type: "cp".to_string(),

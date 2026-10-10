@@ -2,7 +2,7 @@
 import { Chessground } from "@lichess-org/chessground";
 import type { Api } from "@lichess-org/chessground/api";
 import type { Key } from "@lichess-org/chessground/types";
-import type { PvLine } from "./panels";
+import { formatScore, type PvLine } from "./panels";
 
 export interface SideBoardSlot {
   container: HTMLElement;
@@ -38,16 +38,7 @@ function parseUciMove(uci: string): { orig: Key; dest: Key } | null {
   return { orig, dest };
 }
 
-function formatScoreBrief(score: { type: "cp" | "mate"; value: number } | null | undefined): string {
-  if (!score) return "--";
-  if (score.type === "mate") {
-    const sign = score.value > 0 ? "+M" : "-M";
-    return `${sign}${Math.abs(score.value)}`;
-  }
-  const cp = score.value / 100;
-  const sign = cp > 0 ? "+" : "";
-  return `${sign}${cp.toFixed(2)}`;
-}
+const formatScoreBrief = formatScore;
 
 export function createBoards(elements: BoardElements): BoardManager {
   let isFlipped = false;

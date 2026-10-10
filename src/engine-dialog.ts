@@ -40,6 +40,22 @@ export interface ProbeResult {
   options: ProbeOption[];
 }
 
+const PROFILES_KEY = "engineProfiles";
+
+function loadProfiles(): Record<string, EngineConfig> {
+  try {
+    return JSON.parse(localStorage.getItem(PROFILES_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveProfile(cfg: EngineConfig) {
+  const profiles = loadProfiles();
+  profiles[cfg.preset.toLowerCase()] = cfg;
+  localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
+}
+
 type SectionKey = "white" | "black" | "evaluator";
 
 let dialogEl: HTMLDialogElement | null = null;
@@ -128,6 +144,7 @@ function createSectionUI(
       <div class="test-section">
         <div style="display: flex; gap: 0.5rem; align-items: center;">
           <button type="button" class="btn sec-test">Test Engine</button>
+          <button type="button" class="btn sec-save-profile">Save Profile</button>
         </div>
         <div class="test-result-box sec-test-result" style="display: none;"></div>
       </div>
@@ -149,6 +166,13 @@ function createSectionUI(
   const extraOptionsList = section.querySelector(".sec-extra-opts") as HTMLElement;
   const testBtn = section.querySelector(".sec-test") as HTMLButtonElement;
   const testResultBox = section.querySelector(".sec-test-result") as HTMLElement;
+
+  const saveProfileBtn = section.querySelector(".sec-save-profile") as HTMLButtonElement;
+  saveProfileBtn.addEventListener("click", () => {
+    saveProfile(collectSectionConfig(key));
+    saveProfileBtn.textContent = "Saved ✓";
+    setTimeout(() => (saveProfileBtn.textContent = "Save Profile"), 1200);
+  });
 
   // Fill presets dropdown
   for (const p of presets) {
@@ -201,6 +225,13 @@ function createSectionUI(
     const preset = presets.find(
       (p) => p.name.toLowerCase() === selectedPresetName.toLowerCase()
     );
+
+    // Restore the saved profile for this preset, if any
+    const saved = loadProfiles()[selectedPresetName.toLowerCase()];
+    if (saved) {
+      populateSection(key, saved);
+      return;
+    }
 
     // Apply detect_engine
     try {
@@ -442,6 +473,7 @@ function buildDialog(): HTMLDialogElement {
       const white = collectSectionConfig("white");
       const black = collectSectionConfig("black");
       const evaluator = collectSectionConfig("evaluator");
+      for (const c of [white, black, evaluator]) saveProfile(c);
 
       const newConfig: Config = {
         white,

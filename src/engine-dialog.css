@@ -6,7 +6,7 @@
   padding: 1.25rem;
   max-width: 900px;
   width: 95vw;
-  max-height: 85vh;
+  max-height: 95vh;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
 }
 
@@ -20,7 +20,7 @@
   flex-direction: column;
   gap: 1.25rem;
   overflow-y: auto;
-  max-height: calc(85vh - 2.5rem);
+  max-height: calc(95vh - 2.5rem);
   padding-right: 0.5rem;
 }
 
@@ -98,10 +98,16 @@
   background: #18181c;
   border: 1px solid #444;
   color: #eee;
+  color-scheme: dark;
   padding: 0.4rem 0.6rem;
   border-radius: 4px;
   font-size: 0.9rem;
   outline: none;
+}
+
+.engine-dialog select option {
+  background: #18181c;
+  color: #eee;
 }
 
 .engine-dialog input:focus,

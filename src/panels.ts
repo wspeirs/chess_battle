@@ -1,7 +1,12 @@
 // src/panels.ts - PV and search stats panels
+export type ScoreValue =
+  | { type: "cp" | "mate"; value: number }
+  | { Cp: number }
+  | { Mate: number };
+
 export interface PvLine {
   multipv: number;
-  score: { type: "cp" | "mate"; value: number } | null;
+  score: ScoreValue | null;
   wdl?: [number, number, number] | null;
   san: string[];
   end_fen: string;
@@ -26,15 +31,27 @@ export interface MoveHistoryItem {
   san: string;
 }
 
-export function formatScore(score: { type: "cp" | "mate"; value: number } | null | undefined): string {
+export function formatScore(score: ScoreValue | null | undefined): string {
   if (!score) return "--";
-  if (score.type === "mate") {
-    const sign = score.value > 0 ? "+M" : "-M";
-    return `${sign}${Math.abs(score.value)}`;
+  if ("type" in score) {
+    if (score.type === "mate") {
+      const sign = score.value > 0 ? "+M" : "-M";
+      return `${sign}${Math.abs(score.value)}`;
+    }
+    const cp = score.value / 100;
+    const sign = cp > 0 ? "+" : "";
+    return `${sign}${cp.toFixed(2)}`;
   }
-  const cp = score.value / 100;
-  const sign = cp > 0 ? "+" : "";
-  return `${sign}${cp.toFixed(2)}`;
+  if ("Mate" in score) {
+    const sign = score.Mate > 0 ? "+M" : "-M";
+    return `${sign}${Math.abs(score.Mate)}`;
+  }
+  if ("Cp" in score) {
+    const cp = score.Cp / 100;
+    const sign = cp > 0 ? "+" : "";
+    return `${sign}${cp.toFixed(2)}`;
+  }
+  return "--";
 }
 
 export function formatTime(ms: number | null): string {

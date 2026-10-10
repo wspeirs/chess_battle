@@ -43,6 +43,7 @@ const btnEngines = document.getElementById("btn-engines") as HTMLButtonElement;
 const btnMode = document.getElementById("btn-mode") as HTMLButtonElement;
 const btnNext = document.getElementById("btn-next") as HTMLButtonElement;
 const btnMoveNow = document.getElementById("btn-move-now") as HTMLButtonElement;
+const btnPause = document.getElementById("btn-pause") as HTMLButtonElement;
 const btnFlip = document.getElementById("btn-flip") as HTMLButtonElement;
 const btnSideBoards = document.getElementById("btn-side-boards") as HTMLButtonElement;
 
@@ -66,6 +67,7 @@ let currentMode: "play-to-end" | "turn-by-turn" = "play-to-end";
 let currentPly = 0;
 let isGameOver = false;
 let awaitingNext = false;
+let isPaused = false;
 let errorTimeout: number | null = null;
 
 // Sizing eval bar to match main board height
@@ -83,6 +85,9 @@ function updateNextButton() {
   // AwaitingNext derivation: arena lacks explicit awaiting-next event, so we derive:
   // turn-by-turn mode and game not over and engine-info received for current side to move.
   btnNext.disabled = !(currentMode === "turn-by-turn" && !isGameOver && awaitingNext);
+  btnPause.disabled = isGameOver || currentMode === "turn-by-turn";
+  btnMode.disabled = isPaused;
+  btnMoveNow.disabled = isPaused;
 }
 
 function showError(message: string) {
@@ -104,6 +109,10 @@ btnNewGame.addEventListener("click", async () => {
   isGameOver = false;
   btnSavePgn.disabled = true;
   awaitingNext = false;
+  isPaused = false;
+  btnPause.textContent = "Pause";
+  btnPause.classList.remove("active");
+  updateNextButton();
   currentPly = 0;
 
   const rawFen = inputFen.value.trim();
@@ -116,6 +125,7 @@ btnNewGame.addEventListener("click", async () => {
     panels.reset();
     syncEvalBarHeight();
   } catch (err: unknown) {
+    showError(`New game error: ${String(err)}`);
   }
 });
 
@@ -136,6 +146,20 @@ btnMode.addEventListener("click", async () => {
     updateNextButton();
   } catch (err: unknown) {
     showError(`Mode switch error: ${String(err)}`);
+  }
+});
+
+// Pause = backend turn-by-turn (infinite search, no auto-advance) without the Next button.
+btnPause.addEventListener("click", async () => {
+  const pausing = !isPaused;
+  try {
+    await invoke("set_mode", { mode: pausing ? "turn-by-turn" : "play-to-end" });
+    isPaused = pausing;
+    btnPause.textContent = pausing ? "Resume" : "Pause";
+    btnPause.classList.toggle("active", pausing);
+    updateNextButton();
+  } catch (err: unknown) {
+    showError(`Pause error: ${String(err)}`);
   }
 });
 
